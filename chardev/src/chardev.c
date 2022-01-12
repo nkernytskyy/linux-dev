@@ -20,6 +20,27 @@
 #include <asm/io.h>
 
 
+// LKM usage:
+// make clean && make 
+// sudo dmesg --clear && sudo insmod src/chardev.ko && sudo dmesg
+// sudo rmmod chardev && sudo dmesg
+
+
+// workqueue static
+void workqueue_fn(struct work_struct *work);
+DECLARE_WORK(workqueue, workqueue_fn);
+void workqueue_fn(struct work_struct *work)
+{
+    printk(KERN_INFO "workqueue_s: working!\n");
+}
+// workqueue dynamic
+struct work_struct * workqueue_dyn;
+void workqueue_fn_dyn(struct work_struct *work)
+{
+    printk(KERN_INFO "workqueue_d: working!\n");
+}
+
+
 // sysfs
 struct kobject *kobj_ref;
 unsigned long sysfs_val = 0;
@@ -93,6 +114,8 @@ static irqreturn_t irq_handler(int irq, void* dev_id)
 	if (i % 20 == 0) {
 		printk(KERN_INFO "Keyboard IRQ: occured %d times\n", i);
 		tasklet_schedule(&tasklet1);
+		schedule_work(&workqueue);
+		schedule_work(workqueue_dyn);
 	}
 	return IRQ_HANDLED;
 }
@@ -191,6 +214,11 @@ static int  __init chardrv_init(void)
 	}
 	tasklet_init(tasklet2, tasklet_fn2, 234567UL);
 	tasklet_schedule(tasklet2);
+
+
+	// workqueue dynamic
+	workqueue_dyn = kmalloc(sizeof(struct work_struct), GFP_KERNEL);
+	INIT_WORK(workqueue_dyn, workqueue_fn_dyn);
 
 
 	// kthread
