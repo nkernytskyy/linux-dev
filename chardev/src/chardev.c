@@ -16,7 +16,43 @@
 #include <linux/jiffies.h>
 #include <linux/timer.h>
 #include <linux/interrupt.h>
+#include <linux/mutex.h>
 #include <asm/io.h>
+
+
+// LKM usage:
+// make clean && make 
+// sudo dmesg --clear && sudo insmod src/chardev.ko && sudo dmesg
+// sudo rmmod chardev && sudo dmesg
+
+
+// workqueue static
+void workqueue_fn(struct work_struct *work);
+DECLARE_WORK(workqueue, workqueue_fn);
+void workqueue_fn(struct work_struct *work)
+{
+    printk(KERN_INFO "workqueue_s: working!\n");
+}
+// workqueue dynamic
+struct work_struct * workqueue_dyn;
+void workqueue_fn_dyn(struct work_struct *work)
+{
+    printk(KERN_INFO "workqueue_d: working!\n");
+}
+
+
+// sysfs
+struct kobject *kobj_ref;
+unsigned long sysfs_val = 0;
+static ssize_t sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf);
+static ssize_t sysfs_save(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count);
+struct kobj_attribute sysfs_attr = __ATTR(sysfs_val, 0660, sysfs_show, sysfs_save);
+// usage:
+// cd /sys/kernel/my_sysfs/
+// sudo chmod a=rw sysfs_val
+// echo 333 > sysfs_val
+// cat sysfs_val 
+// sudo dmesg | grep sysfs
 
 
 // timer
@@ -25,16 +61,24 @@ static struct timer_list char_timer;
 void timer_callback(struct timer_list * timer);
 void timer_callback(struct timer_list * timer)
 {
-	printk(KERN_INFO "timer_callback at %lu jiffies == %d ms\n", 
-		jiffies, jiffies_to_msecs(jiffies));
+	// printk(KERN_INFO "timer_callback at %lu jiffies == %d ms\n", jiffies, jiffies_to_msecs(jiffies));
 	mod_timer(&char_timer, jiffies+msecs_to_jiffies(TIMEOUT_MS));
-
 }
 
  
 // kthread
 static struct task_struct *char_thread1;
 int char_thread_fn1(void * p);
+
+
+// mutex 
+// struct mutex char_mutex;
+DEFINE_MUTEX(char_mutex);
+unsigned long char_mutex_val = 0;
+static struct task_struct *char_mutex_thread1;
+static struct task_struct *char_mutex_thread2;
+int char_mutex_thread_fn1(void * p);
+int char_mutex_thread_fn2(void * p);
 
 
 // spinlock
@@ -52,11 +96,11 @@ DECLARE_TASKLET(tasklet1, tasklet_fn1);
 struct tasklet_struct * tasklet2;
 void tasklet_fn1(struct tasklet_struct * data) 
 {
-	printk(KERN_INFO "Executing tasklet 1: data = %ld\n", data->data);
+	// printk(KERN_INFO "Executing tasklet 1: data = %ld\n", data->data);
 }
 void tasklet_fn2(unsigned long data)
 {
-	printk(KERN_INFO "Executing tasklet 2: data = %ld\n", data);
+	// printk(KERN_INFO "Executing tasklet 2: data = %ld\n", data);
 }
 
 
@@ -67,9 +111,11 @@ static irqreturn_t irq_handler(int irq, void* dev_id)
 {
 	static uint8_t i = 0;
 	++i;
-	if (i % 10 == 0) {
-		printk(KERN_INFO "Keyboard IRQ occured %d times\n", i);
+	if (i % 20 == 0) {
+		printk(KERN_INFO "Keyboard IRQ: occured %d times\n", i);
 		tasklet_schedule(&tasklet1);
+		schedule_work(&workqueue);
+		schedule_work(workqueue_dyn);
 	}
 	return IRQ_HANDLED;
 }
@@ -146,6 +192,14 @@ static int  __init chardrv_init(void)
 		goto r_irq;
 	}
 
+	
+	// sysfs - create directory /sys/kernel/my_sysfs
+	kobj_ref = kobject_create_and_add("my_sysfs",  kernel_kobj);
+	if (sysfs_create_file(kobj_ref, &sysfs_attr.attr)) {
+		printk(KERN_ERR "\tERROR creating sysfs file\n");
+		goto r_sysfs;
+	}
+
 
 	// timer
 	timer_setup(&char_timer, timer_callback, 0);
@@ -162,6 +216,11 @@ static int  __init chardrv_init(void)
 	tasklet_schedule(tasklet2);
 
 
+	// workqueue dynamic
+	workqueue_dyn = kmalloc(sizeof(struct work_struct), GFP_KERNEL);
+	INIT_WORK(workqueue_dyn, workqueue_fn_dyn);
+
+
 	// kthread
 	// char_thread1 = kthread_run(char_thread_fn1, NULL, "char_thread1");
 	char_thread1 = kthread_create(char_thread_fn1, NULL, "char_thread1");
@@ -171,6 +230,7 @@ static int  __init chardrv_init(void)
 		printk(KERN_ERR "\tERROR creating kthread 1\n");
 		goto r_device;
 	}
+
 
 	// kthread w/ spinlock
 	// char_thread2 = kthread_run(char_thread_fn2, NULL, "char_thread2");
@@ -191,10 +251,26 @@ static int  __init chardrv_init(void)
 	}
 
 
+	// kthread w/ mutex
+	mutex_init(&char_mutex);
+	char_mutex_thread1 = kthread_run(char_mutex_thread_fn1, NULL, "char_mutex_thread1");
+	if (char_mutex_thread1 == NULL) {
+		printk(KERN_ERR "\tERROR creating char_mutex_thread 1\n");
+		goto r_device;
+	}
+	char_mutex_thread2 = kthread_run(char_mutex_thread_fn2, NULL, "char_mutex_thread2");
+	if (char_mutex_thread2 == NULL) {
+		printk(KERN_ERR "\tERROR creating char_mutex_thread 2\n");
+		goto r_device;
+	}
+	
 	return 0;
 
 r_irq:
 	free_irq(IRQ_NO, (void*)(irq_handler));
+r_sysfs:
+	kobject_put(kobj_ref);
+	sysfs_remove_file(kernel_kobj, &sysfs_attr.attr);
 r_device:
 	class_destroy(dev_class);
 r_class:
@@ -205,11 +281,15 @@ r_class:
 
 static void __exit chardrv_exit(void)
 {
-	kthread_stop(char_thread1);
-	kthread_stop(char_thread2);
+	kthread_stop(char_mutex_thread2);
+	kthread_stop(char_mutex_thread1);
 	kthread_stop(char_thread3);
+	kthread_stop(char_thread2);
+	kthread_stop(char_thread1);
 	tasklet_kill(tasklet2);
 	del_timer(&char_timer);
+	kobject_put(kobj_ref);
+	sysfs_remove_file(kernel_kobj, &sysfs_attr.attr);
 	free_irq(IRQ_NO, (void*)(irq_handler));
 	device_destroy(dev_class, dev);
 	class_destroy(dev_class);
@@ -242,7 +322,7 @@ static int my_close(struct inode * inode, struct file * file)
 static ssize_t my_read( struct file * file, char __user * buf, size_t len, loff_t * off)
 {
 	copy_to_user(buf, kernel_buffer, MEM_SIZE);
-	printk(KERN_INFO "copy_to_user %u bytes\n", MEM_SIZE);
+	printk(KERN_INFO "copy_to_user   %u bytes\n", MEM_SIZE);
 	return MEM_SIZE;
 }
 
@@ -273,11 +353,37 @@ static long my_ioctl(struct file * file, unsigned int cmd, unsigned long arg)
 	return 0;
 }
 
+int char_mutex_thread_fn1(void * p)
+{
+	while(!kthread_should_stop()) {
+		// mutex_lock_interruptible(&char_mutex);
+		mutex_lock(&char_mutex);
+		++char_mutex_val;
+		// printk(KERN_INFO "mutex: inside thread 1 ... %lu\n", char_mutex_val);
+		mutex_unlock(&char_mutex);
+		msleep(1000);
+	}
+	return 0;
+}
+
+int char_mutex_thread_fn2(void * p)
+{
+	while(!kthread_should_stop()) {
+		// mutex_lock_interruptible(&char_mutex);
+		mutex_lock(&char_mutex);
+		++char_mutex_val;
+		// printk(KERN_INFO "mutex: inside thread 2 ... %lu\n", char_mutex_val);
+		mutex_unlock(&char_mutex);
+		msleep(1000);
+	}
+	return 0;
+}
+
 int char_thread_fn1(void * p)
 {
 	int i = 0;
 	while(!kthread_should_stop()) {
-		printk(KERN_INFO "Inside kthread ... %d\n", i);
+		// printk(KERN_INFO "Inside kthread ... %d\n", i);
 		++i;
 		msleep(1000);
 	}
@@ -288,19 +394,17 @@ int char_thread_fn2(void * p)
 {
 	while(!kthread_should_stop()) {
 		if (!spin_is_locked(&char_spinlock)) {
-			printk(KERN_INFO "spin: unlocked\n");
+			// printk(KERN_INFO "spin: unlocked\n");
 			spin_lock(&char_spinlock);
 			if (spin_is_locked(&char_spinlock)) {
 				static uint32_t spinlock_var = 0;
-				printk(KERN_INFO "spin: locked\n");
-				printk(KERN_INFO "spinlock_var 2 = %d\n", spinlock_var);
+				// printk(KERN_INFO "spin:   locked: spinlock_var 2 = %d\n", spinlock_var);
 				++spinlock_var;
 				spin_unlock(&char_spinlock);
 				msleep(1000);
 			}
 		}
 	}
-
 	return 0;
 }
 
@@ -308,20 +412,31 @@ int char_thread_fn3(void * p)
 {
 	while(!kthread_should_stop()) {
 		if (!spin_is_locked(&char_spinlock)) {
-			printk(KERN_INFO "spin: unlocked\n");
+			// printk(KERN_INFO "spin: unlocked\n");
 			spin_lock(&char_spinlock);
 			if (spin_is_locked(&char_spinlock)) {
 				static uint32_t spinlock_var = 0;
-				printk(KERN_INFO "spin: locked\n");
-				printk(KERN_INFO "spinlock_var 3 = %d\n", spinlock_var);
+				// printk(KERN_INFO "spin:   locked: spinlock_var 3 = %d\n", spinlock_var);
 				++spinlock_var;
 				spin_unlock(&char_spinlock);
 				msleep(1000);
 			}
 		}
 	}
-
 	return 0;
+}
+
+static ssize_t sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf) 
+{
+	printk(KERN_INFO "sysfs: show\n");
+	return sprintf(buf, "%ld", sysfs_val);
+}
+
+static ssize_t sysfs_save(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count) 
+{
+	printk(KERN_INFO "sysfs: save\n");
+	sscanf(buf, "%ld", &sysfs_val);
+	return count;
 }
 
 
@@ -333,3 +448,4 @@ MODULE_INFO(name, "CharDev");
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("me");
 MODULE_DESCRIPTION("my-CharDev");
+
