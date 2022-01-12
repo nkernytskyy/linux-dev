@@ -20,6 +20,20 @@
 #include <asm/io.h>
 
 
+// sysfs
+struct kobject *kobj_ref;
+unsigned long sysfs_val = 0;
+static ssize_t sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf);
+static ssize_t sysfs_save(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count);
+struct kobj_attribute sysfs_attr = __ATTR(sysfs_val, 0660, sysfs_show, sysfs_save);
+// usage:
+// cd /sys/kernel/my_sysfs/
+// sudo chmod a=rw sysfs_val
+// echo 333 > sysfs_val
+// cat sysfs_val 
+// sudo dmesg | grep sysfs
+
+
 // timer
 #define TIMEOUT_MS (3000)
 static struct timer_list char_timer;
@@ -155,6 +169,14 @@ static int  __init chardrv_init(void)
 		goto r_irq;
 	}
 
+	
+	// sysfs - create directory /sys/kernel/my_sysfs
+	kobj_ref = kobject_create_and_add("my_sysfs",  kernel_kobj);
+	if (sysfs_create_file(kobj_ref, &sysfs_attr.attr)) {
+		printk(KERN_ERR "\tERROR creating sysfs file\n");
+		goto r_sysfs;
+	}
+
 
 	// timer
 	timer_setup(&char_timer, timer_callback, 0);
@@ -218,6 +240,9 @@ static int  __init chardrv_init(void)
 
 r_irq:
 	free_irq(IRQ_NO, (void*)(irq_handler));
+r_sysfs:
+	kobject_put(kobj_ref);
+	sysfs_remove_file(kernel_kobj, &sysfs_attr.attr);
 r_device:
 	class_destroy(dev_class);
 r_class:
@@ -235,6 +260,8 @@ static void __exit chardrv_exit(void)
 	kthread_stop(char_thread1);
 	tasklet_kill(tasklet2);
 	del_timer(&char_timer);
+	kobject_put(kobj_ref);
+	sysfs_remove_file(kernel_kobj, &sysfs_attr.attr);
 	free_irq(IRQ_NO, (void*)(irq_handler));
 	device_destroy(dev_class, dev);
 	class_destroy(dev_class);
@@ -304,7 +331,7 @@ int char_mutex_thread_fn1(void * p)
 		// mutex_lock_interruptible(&char_mutex);
 		mutex_lock(&char_mutex);
 		++char_mutex_val;
-		printk(KERN_INFO "mutex: inside thread 1 ... %lu\n", char_mutex_val);
+		// printk(KERN_INFO "mutex: inside thread 1 ... %lu\n", char_mutex_val);
 		mutex_unlock(&char_mutex);
 		msleep(1000);
 	}
@@ -317,7 +344,7 @@ int char_mutex_thread_fn2(void * p)
 		// mutex_lock_interruptible(&char_mutex);
 		mutex_lock(&char_mutex);
 		++char_mutex_val;
-		printk(KERN_INFO "mutex: inside thread 2 ... %lu\n", char_mutex_val);
+		// printk(KERN_INFO "mutex: inside thread 2 ... %lu\n", char_mutex_val);
 		mutex_unlock(&char_mutex);
 		msleep(1000);
 	}
@@ -350,7 +377,6 @@ int char_thread_fn2(void * p)
 			}
 		}
 	}
-
 	return 0;
 }
 
@@ -369,8 +395,20 @@ int char_thread_fn3(void * p)
 			}
 		}
 	}
-
 	return 0;
+}
+
+static ssize_t sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf) 
+{
+	printk(KERN_INFO "sysfs: show\n");
+	return sprintf(buf, "%ld", sysfs_val);
+}
+
+static ssize_t sysfs_save(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count) 
+{
+	printk(KERN_INFO "sysfs: save\n");
+	sscanf(buf, "%ld", &sysfs_val);
+	return count;
 }
 
 
@@ -382,3 +420,4 @@ MODULE_INFO(name, "CharDev");
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("me");
 MODULE_DESCRIPTION("my-CharDev");
+
