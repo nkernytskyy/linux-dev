@@ -1,0 +1,41 @@
+sudo ln -s chardev.ko /lib/modules/$(uname -r)
+
+# sudo -E = sudo --preserve-env
+sudo -E make install
+sudo depmod -a
+sudo modprobe chardev
+sudo modprobe -r chardev
+
+sudo insmod chardev.ko
+lsmod | grep chardev
+dmesg | tail
+sudo mknod /dev/chardev c 510 0
+sudo rmmod chardev
+
+
+ERROR: Kernel configuration is invalid.
+SOLUTION: re-install the linux-headers.
+sudo apt install --reinstall linux-headers-$(uname -r)
+sudo reboot
+
+
+ERROR: 
+sudo modprobe chardev
+sudo modprobe --dump-modversion chardev
+dmesg | tail 
+	disagrees about version of symbol module_layout
+sudo modprobe -f chardev
+sudo modprobe --force chardev
+
+
+MISC:
+
+apt-get install build-essential linux-headers-`uname -r`
+
+sudo apt update && \
+sudo apt -y install modules-extra-$(uname -r) && \
+sudo apt -y install dkms
+
+
+
+
